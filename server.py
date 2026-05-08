@@ -424,6 +424,12 @@ def run_crew_thread(question: str, msg_queue: queue.Queue, frameworks: dict = No
 
 # ── SSE endpoint ─────────────────────────────────────────────────────────────
 
+@app.route("/debug")
+def debug():
+    key = os.environ.get("ANTHROPIC_API_KEY", "")
+    return jsonify({"key_set": bool(key), "key_prefix": key[:12] if key else "none"})
+
+
 @app.route("/api/run", methods=["POST"])
 def run_crew():
     data = request.get_json(silent=True) or {}
