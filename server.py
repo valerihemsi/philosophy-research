@@ -265,7 +265,10 @@ def run_crew_thread(question: str, msg_queue: queue.Queue, frameworks: dict = No
     try:
         from crewai import Agent, Crew, LLM, Process, Task
 
-        llm = LLM(model="anthropic/claude-sonnet-4-6")
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required")
+        llm = LLM(model="anthropic/claude-sonnet-4-6", api_key=api_key)
 
         # Seçilen framework'leri çöz
         fw = frameworks or DEFAULT_FRAMEWORKS
