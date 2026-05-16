@@ -1446,6 +1446,37 @@ function setCardDone(idx, html, onDone) {
   typewrite(output, html, onDone);
 }
 
+// Token streaming: ilk delta gelince çağrılır, gövdeyi canlı render moduna alır.
+function setCardStreaming(idx) {
+  const card   = document.getElementById('card-' + idx);
+  const status = document.getElementById('status-' + idx);
+  const body   = document.getElementById('body-' + idx);
+
+  card.classList.add('running');
+  status.className = 'card-status status-running';
+  status.innerHTML = '<div class="s-ring"></div>';
+
+  body.innerHTML = '';
+  const output = document.createElement('div');
+  output.className = 'card-output';
+  output.id = 'stream-' + idx;
+  body.appendChild(output);
+}
+
+function appendDelta(idx, fullBufferHtml) {
+  const output = document.getElementById('stream-' + idx);
+  if (output) output.innerHTML = fullBufferHtml;
+}
+
+function setCardStreamComplete(idx) {
+  const card   = document.getElementById('card-' + idx);
+  const status = document.getElementById('status-' + idx);
+  card.classList.remove('running');
+  card.classList.add('done');
+  status.className = 'card-status status-done';
+  status.innerHTML = '<div class="s-check">✦</div>';
+}
+
 
 // ══════════════════════════════════════════════════════════════════════════════
 //  MAIN FLOW
@@ -1501,9 +1532,10 @@ function startCrew(question) {
     b.innerHTML = `<div class="card-idle-msg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${icons[i]}</svg><span>Bekleniyor…</span></div>`;
   }
 
-  // SSE
+  // SSE — token-level streaming
   const completedCards = [false, false, false];
-  let typewritingCount = 0;
+  const streamBuffers  = ['', '', ''];
+  const streamStarted  = [false, false, false];
 
   fetch('/api/run', {
     method: 'POST',
@@ -1554,18 +1586,28 @@ function startCrew(question) {
     } else if (msg.type === 'status') {
       setCardRunning(msg.agent);
 
+    } else if (msg.type === 'delta') {
+      const idx = msg.task_index;
+      if (!streamStarted[idx]) {
+        streamStarted[idx] = true;
+        setCardStreaming(idx);
+      }
+      streamBuffers[idx] += msg.text;
+      appendDelta(idx, mdToHtml(streamBuffers[idx]));
+
     } else if (msg.type === 'task_complete') {
       const idx = msg.task_index;
-      const html = mdToHtml(msg.output);
       completedCards[idx] = true;
-      typewritingCount++;
-
-      setCardDone(idx, html, () => {
-        typewritingCount--;
-        if (typewritingCount === 0 && completedCards.every(Boolean)) {
-          document.getElementById('restart-wrap').classList.add('visible');
-        }
-      });
+      // Akış zaten gövdeye yansıdı; sadece bitmiş durumuna geçiş yap.
+      // Eğer (geriye dönük) delta hiç gelmediyse, çıktıyı yine de göster.
+      if (!streamStarted[idx]) {
+        setCardDone(idx, mdToHtml(msg.output), () => {});
+      } else {
+        setCardStreamComplete(idx);
+      }
+      if (completedCards.every(Boolean)) {
+        document.getElementById('restart-wrap').classList.add('visible');
+      }
 
     } else if (msg.type === 'done') {
       finalize();

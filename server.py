@@ -259,163 +259,152 @@ DEFAULT_FRAMEWORKS = {
 }
 
 
-# ── Crew mantığı ─────────────────────────────────────────────────────────────
+# ── Ajan tanımları (doğrudan Anthropic SDK + streaming) ──────────────────────
+
+AGENT_NAMES = ["Felsefi Araştırmacı", "Epistemik Eleştirmen", "Entegral Sentezci"]
+
+
+def _build_agent_prompts(question: str, rfw: dict, cfw: dict, sfw: dict):
+    """Her ajan için (system, user) çiftlerinin listesini döner. user metni
+    önceki ajanların çıktıları runtime'da eklenince tamamlanır."""
+
+    researcher_system = (
+        f"Sen {rfw['name']} geleneğini ({rfw['thinkers']}) derinlemesine bilen "
+        "ve bunu birincil araştırma yöntemi olarak kullanan bir filozofsun. "
+        "Avrupa-merkezli düşünce tarihinin ötesine geçmeyi hedefliyorsun; "
+        "Doğu, İslam, Hint ve Batı felsefi geleneklerini eşit ağırlıkta değerlendirirsin. "
+        "Gücün bilgiyi nasıl şekillendirdiğini görmeye özellikle dikkat edersin. "
+        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
+    )
+    researcher_user = (
+        f'"{question}" sorusunu felsefi perspektiften araştır.\n\n'
+        f"=== KULLANILACAK ARAŞTIRMA ÇERÇEVESİ: {rfw['name'].upper()} ({rfw['thinkers']}) ===\n"
+        f"{rfw['instruction']}\n\n"
+        "=== ARAŞTIRMA EKSENLERİ ===\n"
+        "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
+        "1. Bu soruya verilen en güçlü yanıtlar ve karşı-argümanlar\n"
+        "2. Tarihin farklı kültür ve dönemlerindeki düşünürlerin tutumları\n"
+        "3. Sorunun sosyolojik ve güç-ilişkileri boyutu\n"
+        "4. Seçilen çerçevenin bu soruya özgün katkısı nedir?\n"
+        "5. Çözüme kavuşmamış gerilimler ve açık sorular\n"
+        "6. Okuyucuya: Bu soruyu neden önemsemeli?\n\n"
+        f"Çerçeve adını ({rfw['name']}) ve temel kavramlarını açıkça kullan. "
+        "En az 700 kelimelik, bölümlere ayrılmış felsefi araştırma raporu yaz."
+    )
+
+    critic_system = (
+        f"Sen {cfw['name']} metodolojisini ({cfw['thinkers']}) ustalıkla uygulayan "
+        "bir epistemik hakemsin. Hiçbir tarafın bakış açısını önceden benimsemeden "
+        "tüm argümanları eşit mesafeden değerlendirirsin. "
+        "Bulgularını araştırmacıya karşı değil, epistemik dürüstlük adına ortaya koyarsın. "
+        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
+    )
+    critic_user_template = (
+        f'Aşağıdaki araştırma raporunu, "{question}" sorusu bağlamında eleştir.\n\n'
+        f"=== KULLANILACAK ELEŞTİRİ ÇERÇEVESİ: {cfw['name'].upper()} ({cfw['thinkers']}) ===\n"
+        f"{cfw['instruction']}\n\n"
+        "=== ELEŞTİRİ EKSENLERİ ===\n"
+        "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
+        "1. Araştırmacının çerçeve önyargıları — hangi pozisyona baştan eğilimli?\n"
+        "2. Retorik ağırlık mekanizmaları — hangi argümanlar ne kadar yer aldı?\n"
+        "3. Eksik sesler — hangi düşünürler, gelenekler veya yaklaşımlar dışlandı?\n"
+        "4. Kavramsal boşluklar — tanımlanmayan ya da muğlak bırakılan terimler\n"
+        "5. Araştırmacının en büyük kör noktası (tek paragraf)\n"
+        "6. Seçilen eleştiri çerçevesi araştırmada ne buldu, ne bulamadı?\n\n"
+        f"Çerçeve adını ({cfw['name']}) ve temel kavramlarını açıkça kullan. "
+        "En az 500 kelimelik epistemik denetim raporu yaz.\n\n"
+        "=== ARAŞTIRMACININ RAPORU ===\n"
+        "{research_output}"
+    )
+
+    synth_system = (
+        f"Sen {sfw['name']} modelini ({sfw['thinkers']}) derinlemesine bilen "
+        "bir entegral filozofsun. Gerçekliğin birbirine indirgenemeyen boyutlarını "
+        "bütünleştirmeyi görev sayarsın; hiçbir tekil bakış açısının tek başına "
+        "yeterli olmadığını bilirsin. "
+        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
+    )
+    synth_user_template = (
+        f'"{question}" sorusu bağlamında, aşağıdaki araştırma ve eleştiri raporlarını sentezle.\n\n'
+        f"=== KULLANILACAK SENTEZ ÇERÇEVESİ: {sfw['name'].upper()} ({sfw['thinkers']}) ===\n"
+        f"{sfw['instruction']}\n\n"
+        "=== SENTEZ GÖREVİ ===\n"
+        "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
+        "1. Araştırma ve eleştiri raporlarındaki temel gerilimler ve çelişkiler\n"
+        "2. Seçilen sentez çerçevesi bu gerilimleri nasıl dönüştürüyor?\n"
+        f"3. {rfw['name']} + {cfw['name']} bulgularını {sfw['name']} içinde bütünleştir\n"
+        "4. Hangi boyutlar her iki raporda da ihmal edildi?\n"
+        "5. Sahte uzlaşıyı gerçek entegrasyondan ayıran kriter nedir?\n"
+        "6. Kapanış: Bu soruyu sormaya devam etmenin önemi\n\n"
+        f"Çerçeve adını ({sfw['name']}) ve temel kavramlarını açıkça kullan. "
+        "En az 600 kelimelik entegral sentez raporu yaz.\n\n"
+        "=== ARAŞTIRMACININ RAPORU ===\n"
+        "{research_output}\n\n"
+        "=== ELEŞTİRMENİN RAPORU ===\n"
+        "{critique_output}"
+    )
+
+    return [
+        (researcher_system, researcher_user),
+        (critic_system, critic_user_template),
+        (synth_system, synth_user_template),
+    ]
+
 
 def run_crew_thread(question: str, msg_queue: queue.Queue, frameworks: dict = None):
     try:
-        from crewai import Agent, Crew, LLM, Process, Task
+        import anthropic
 
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY is required")
-        llm = LLM(model="anthropic/claude-sonnet-4-6", api_key=api_key)
+        client = anthropic.Anthropic(api_key=api_key)
 
-        # Seçilen framework'leri çöz
         fw = frameworks or DEFAULT_FRAMEWORKS
         rfw = FRAMEWORKS.get(fw.get("research",  "analytic"),           FRAMEWORKS["analytic"])
         cfw = FRAMEWORKS.get(fw.get("critique",  "impartial_spectator"), FRAMEWORKS["impartial_spectator"])
         sfw = FRAMEWORKS.get(fw.get("synthesis", "aqal"),               FRAMEWORKS["aqal"])
 
-        researcher = Agent(
-            role=f"Felsefi Araştırmacı — {rfw['name']} ({rfw['thinkers']})",
-            goal=(
-                f'"{question}" sorusunu {rfw["name"]} çerçevesini birincil yöntem olarak '
-                "kullanarak araştır. Farklı kültürel geleneklerden sesleri eşit ağırlıkta "
-                "değerlendir; örtülü varsayımları ifşa et; kendi epistemik konumunu açıkça beyan et."
-            ),
-            backstory=(
-                f"Sen {rfw['name']} geleneğini ({rfw['thinkers']}) derinlemesine bilen "
-                f"ve bunu birincil araştırma yöntemi olarak kullanan bir filozofsun. "
-                "Avrupa-merkezli düşünce tarihinin ötesine geçmeyi hedefliyorsun; "
-                "Doğu, İslam, Hint ve Batı felsefi geleneklerini eşit ağırlıkta değerlendirirsin. "
-                "Gücün bilgiyi nasıl şekillendirdiğini görmeye özellikle dikkat edersin."
-            ),
-            llm=llm,
-            verbose=False,
-        )
+        prompts = _build_agent_prompts(question, rfw, cfw, sfw)
 
-        spectator = Agent(
-            role=f"Epistemik Eleştirmen — {cfw['name']} ({cfw['thinkers']})",
-            goal=(
-                f"{cfw['name']} çerçevesini birincil eleştiri yöntemi olarak kullanarak "
-                "araştırmacının çalışmasını denetle. Çerçeve önyargılarını, eksik temsili, "
-                "retorik ağırlık mekanizmalarını ve araştırmacının kör noktalarını ortaya koy."
-            ),
-            backstory=(
-                f"Sen {cfw['name']} metodolojisini ({cfw['thinkers']}) ustalıkla uygulayan "
-                "bir epistemik hakemsin. Hiçbir tarafın bakış açısını önceden benimsemeden "
-                "tüm argümanları eşit mesafeden değerlendirirsin. "
-                "Bulgularını araştırmacıya karşı değil, epistemik dürüstlük adına ortaya koyarsun."
-            ),
-            llm=llm,
-            verbose=False,
-        )
+        outputs = ["", "", ""]
 
-        synthesizer = Agent(
-            role=f"Entegral Sentezci — {sfw['name']} ({sfw['thinkers']})",
-            goal=(
-                f"{sfw['name']} çerçevesini birincil sentez yöntemi olarak kullanarak "
-                "hem araştırma raporunu hem de eleştiri analizini entegre bir senteze kavuştur. "
-                "Sahte uzlaşı yerine gerilimleri koruyan dürüst bir bütünleşme sun."
-            ),
-            backstory=(
-                f"Sen {sfw['name']} modelini ({sfw['thinkers']}) derinlemesine bilen "
-                "bir entegral filozofsun. Gerçekliğin birbirine indirgenemeyen boyutlarını "
-                "bütünleştirmeyi görev sayarsın; hiçbir tekil bakış açısının tek başına "
-                "yeterli olmadığını bilirsin."
-            ),
-            llm=llm,
-            verbose=False,
-        )
+        for idx, (system_prompt, user_template) in enumerate(prompts):
+            if idx == 1:
+                user_msg = user_template.replace("{research_output}", outputs[0])
+            elif idx == 2:
+                user_msg = (
+                    user_template
+                    .replace("{research_output}", outputs[0])
+                    .replace("{critique_output}", outputs[1])
+                )
+            else:
+                user_msg = user_template
 
-        # ── Görevler ────────────────────────────────────────────────────────
+            collected = []
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=4000,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_msg}],
+            ) as stream:
+                for text in stream.text_stream:
+                    collected.append(text)
+                    msg_queue.put({
+                        "type": "delta",
+                        "task_index": idx,
+                        "text": text,
+                    })
 
-        task1 = Task(
-            description=(
-                f'"{question}" sorusunu felsefi perspektiften araştır.\n\n'
-                f"=== KULLANILACAK ARAŞTIRMA ÇERÇEVESİ: {rfw['name'].upper()} ({rfw['thinkers']}) ===\n"
-                f"{rfw['instruction']}\n\n"
-                "=== ARAŞTIRMA EKSENLERİ ===\n"
-                "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
-                "1. Bu soruya verilen en güçlü yanıtlar ve karşı-argümanlar\n"
-                "2. Tarihin farklı kültür ve dönemlerindeki düşünürlerin tutumları\n"
-                "3. Sorunun sosyolojik ve güç-ilişkileri boyutu\n"
-                "4. Seçilen çerçevenin bu soruya özgün katkısı nedir?\n"
-                "5. Çözüme kavuşmamış gerilimler ve açık sorular\n"
-                "6. Okuyucuya: Bu soruyu neden önemsemeli?\n\n"
-                f"Çerçeve adını ({rfw['name']}) ve temel kavramlarını açıkça kullan. "
-                "En az 700 kelimelik, bölümlere ayrılmış felsefi araştırma raporu yaz."
-            ),
-            expected_output=f"700+ kelimelik {rfw['name']} çerçevesiyle yazılmış felsefi araştırma raporu",
-            agent=researcher,
-        )
-
-        task2 = Task(
-            description=(
-                f'Araştırmacının "{question}" sorusuna yönelik raporunu eleştir.\n\n'
-                f"=== KULLANILACAK ELEŞTİRİ ÇERÇEVESİ: {cfw['name'].upper()} ({cfw['thinkers']}) ===\n"
-                f"{cfw['instruction']}\n\n"
-                "=== ELEŞTİRİ EKSENLERİ ===\n"
-                "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
-                "1. Araştırmacının çerçeve önyargıları — hangi pozisyona baştan eğilimli?\n"
-                "2. Retorik ağırlık mekanizmaları — hangi argümanlar ne kadar yer aldı?\n"
-                "3. Eksik sesler — hangi düşünürler, gelenekler veya yaklaşımlar dışlandı?\n"
-                "4. Kavramsal boşluklar — tanımlanmayan ya da muğlak bırakılan terimler\n"
-                "5. Araştırmacının en büyük kör noktası (tek paragraf)\n"
-                "6. Seçilen eleştiri çerçevesi araştırmada ne buldu, ne bulamadı?\n\n"
-                f"Çerçeve adını ({cfw['name']}) ve temel kavramlarını açıkça kullan. "
-                "En az 500 kelimelik epistemik denetim raporu yaz."
-            ),
-            expected_output=f"500+ kelimelik {cfw['name']} çerçevesiyle yazılmış eleştiri raporu",
-            agent=spectator,
-            context=[task1],
-        )
-
-        task3 = Task(
-            description=(
-                f'"{question}" sorusu bağlamında araştırma ve eleştiri raporlarını sentezle.\n\n'
-                f"=== KULLANILACAK SENTEZ ÇERÇEVESİ: {sfw['name'].upper()} ({sfw['thinkers']}) ===\n"
-                f"{sfw['instruction']}\n\n"
-                "=== SENTEZ GÖREVİ ===\n"
-                "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
-                "1. Araştırma ve eleştiri raporlarındaki temel gerilimler ve çelişkiler\n"
-                "2. Seçilen sentez çerçevesi bu gerilimleri nasıl dönüştürüyor?\n"
-                f"3. {rfw['name']} + {cfw['name']} bulgularını {sfw['name']} içinde bütünleştir\n"
-                "4. Hangi boyutlar her iki raporda da ihmal edildi?\n"
-                "5. Sahte uzlaşıyı gerçek entegrasyondan ayıran kriter nedir?\n"
-                "6. Kapanış: Bu soruyu sormaya devam etmenin önemi\n\n"
-                f"Çerçeve adını ({sfw['name']}) ve temel kavramlarını açıkça kullan. "
-                "En az 600 kelimelik entegral sentez raporu yaz."
-            ),
-            expected_output=f"600+ kelimelik {sfw['name']} çerçevesiyle yazılmış entegral sentez raporu",
-            agent=synthesizer,
-            context=[task1, task2],
-        )
-
-        # ── Callback ─────────────────────────────────────────────────────────
-
-        completed = [0]
-        agent_names = ["Felsefi Araştırmacı", "Tarafsız Gözlemci", "Entegral Sentezci"]
-
-        def task_callback(task_output):
-            idx = completed[0]
+            full_output = "".join(collected)
+            outputs[idx] = full_output
             msg_queue.put({
                 "type": "task_complete",
                 "task_index": idx,
-                "agent_name": agent_names[idx] if idx < 3 else "Ajan",
-                "output": str(task_output),
+                "agent_name": AGENT_NAMES[idx],
+                "output": full_output,
             })
-            completed[0] += 1
 
-        crew = Crew(
-            agents=[researcher, spectator, synthesizer],
-            tasks=[task1, task2, task3],
-            process=Process.sequential,
-            verbose=False,
-            task_callback=task_callback,
-        )
-
-        crew.kickoff()
         msg_queue.put({"type": "done"})
 
     except Exception as exc:
