@@ -1,6 +1,15 @@
 """
 Felsefi Araştırma Sistemi — Flask sunucusu
 Kullanım: python server.py
+
+Pipeline (objektiflik odaklı, 6 aşama):
+  0. Pozisyon Haritalayıcı — sorudaki en güçlü iki karşıt pozisyonu belirler (JSON, akışsız)
+  1. Savunucu A ─┐  paralel: her biri bir pozisyonun EN GÜÇLÜ halini (steelman) savunur
+  2. Savunucu B ─┘
+  3. Kör Eleştirmen — raporları çerçeve adlarını BİLMEDEN denetler + JSON objektiflik rubriği üretir
+  4. Sentezci — seçilen sentez çerçevesiyle bütünleştirir
+  5. Çürütücü — sentezi çürütmeye çalışır (devil's advocate)
+  6. Nihai Sentez — çürütme ışığında revize edilmiş son yanıt
 """
 import os
 from pathlib import Path
@@ -18,11 +27,15 @@ if _env_file.exists():
 from flask import Flask, request, Response, send_from_directory, jsonify
 import json
 import queue
+import re
 import threading
 import warnings
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__, static_folder=".")
+
+MODEL = "claude-sonnet-4-6"
+TEMPERATURE = 0.3          # tekrarlanabilirlik: aynı soru ≈ aynı analiz
 
 
 # ── Statik dosyalar ──────────────────────────────────────────────────────────
@@ -258,100 +271,284 @@ DEFAULT_FRAMEWORKS = {
     "synthesis": "aqal",
 }
 
+# Atıf disiplini — tüm araştırmacı ve sentezci ajanlarına eklenir
+CITATION_RULES = (
+    "ATIF KURALLARI:\n"
+    "• Her önemli iddiayı düşünür + eser referansıyla destekle "
+    "(ör. Wigner 1960, 'The Unreasonable Effectiveness of Mathematics...').\n"
+    "• Emin olmadığın atıf UYDURMA. Kaynağından emin değilsen 'yaygın yorumlardan biri' de "
+    "ve atıf verme.\n"
+    "• İkincil aktarım kullandıysan bunu belirt."
+)
 
-# ── Ajan tanımları (doğrudan Anthropic SDK + streaming) ──────────────────────
 
-AGENT_NAMES = ["Felsefi Araştırmacı", "Epistemik Eleştirmen", "Entegral Sentezci"]
+# ── Pipeline aşamaları ───────────────────────────────────────────────────────
+# Sabit yapı: 0-1 savunucular (paralel), 2 kör eleştirmen, 3 sentez,
+#             4 çürütücü, 5 nihai sentez
 
-
-def _build_agent_prompts(question: str, rfw: dict, cfw: dict, sfw: dict):
-    """Her ajan için (system, user) çiftlerinin listesini döner. user metni
-    önceki ajanların çıktıları runtime'da eklenince tamamlanır."""
-
-    researcher_system = (
-        f"Sen {rfw['name']} geleneğini ({rfw['thinkers']}) derinlemesine bilen "
-        "ve bunu birincil araştırma yöntemi olarak kullanan bir filozofsun. "
-        "Avrupa-merkezli düşünce tarihinin ötesine geçmeyi hedefliyorsun; "
-        "Doğu, İslam, Hint ve Batı felsefi geleneklerini eşit ağırlıkta değerlendirirsin. "
-        "Gücün bilgiyi nasıl şekillendirdiğini görmeye özellikle dikkat edersin. "
-        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
-    )
-    researcher_user = (
-        f'"{question}" sorusunu felsefi perspektiften araştır.\n\n'
-        f"=== KULLANILACAK ARAŞTIRMA ÇERÇEVESİ: {rfw['name'].upper()} ({rfw['thinkers']}) ===\n"
-        f"{rfw['instruction']}\n\n"
-        "=== ARAŞTIRMA EKSENLERİ ===\n"
-        "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
-        "1. Bu soruya verilen en güçlü yanıtlar ve karşı-argümanlar\n"
-        "2. Tarihin farklı kültür ve dönemlerindeki düşünürlerin tutumları\n"
-        "3. Sorunun sosyolojik ve güç-ilişkileri boyutu\n"
-        "4. Seçilen çerçevenin bu soruya özgün katkısı nedir?\n"
-        "5. Çözüme kavuşmamış gerilimler ve açık sorular\n"
-        "6. Okuyucuya: Bu soruyu neden önemsemeli?\n\n"
-        f"Çerçeve adını ({rfw['name']}) ve temel kavramlarını açıkça kullan. "
-        "En az 700 kelimelik, bölümlere ayrılmış felsefi araştırma raporu yaz."
-    )
-
-    critic_system = (
-        f"Sen {cfw['name']} metodolojisini ({cfw['thinkers']}) ustalıkla uygulayan "
-        "bir epistemik hakemsin. Hiçbir tarafın bakış açısını önceden benimsemeden "
-        "tüm argümanları eşit mesafeden değerlendirirsin. "
-        "Bulgularını araştırmacıya karşı değil, epistemik dürüstlük adına ortaya koyarsın. "
-        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
-    )
-    critic_user_template = (
-        f'Aşağıdaki araştırma raporunu, "{question}" sorusu bağlamında eleştir.\n\n'
-        f"=== KULLANILACAK ELEŞTİRİ ÇERÇEVESİ: {cfw['name'].upper()} ({cfw['thinkers']}) ===\n"
-        f"{cfw['instruction']}\n\n"
-        "=== ELEŞTİRİ EKSENLERİ ===\n"
-        "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
-        "1. Araştırmacının çerçeve önyargıları — hangi pozisyona baştan eğilimli?\n"
-        "2. Retorik ağırlık mekanizmaları — hangi argümanlar ne kadar yer aldı?\n"
-        "3. Eksik sesler — hangi düşünürler, gelenekler veya yaklaşımlar dışlandı?\n"
-        "4. Kavramsal boşluklar — tanımlanmayan ya da muğlak bırakılan terimler\n"
-        "5. Araştırmacının en büyük kör noktası (tek paragraf)\n"
-        "6. Seçilen eleştiri çerçevesi araştırmada ne buldu, ne bulamadı?\n\n"
-        f"Çerçeve adını ({cfw['name']}) ve temel kavramlarını açıkça kullan. "
-        "En az 500 kelimelik epistemik denetim raporu yaz.\n\n"
-        "=== ARAŞTIRMACININ RAPORU ===\n"
-        "{research_output}"
-    )
-
-    synth_system = (
-        f"Sen {sfw['name']} modelini ({sfw['thinkers']}) derinlemesine bilen "
-        "bir entegral filozofsun. Gerçekliğin birbirine indirgenemeyen boyutlarını "
-        "bütünleştirmeyi görev sayarsın; hiçbir tekil bakış açısının tek başına "
-        "yeterli olmadığını bilirsin. "
-        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
-    )
-    synth_user_template = (
-        f'"{question}" sorusu bağlamında, aşağıdaki araştırma ve eleştiri raporlarını sentezle.\n\n'
-        f"=== KULLANILACAK SENTEZ ÇERÇEVESİ: {sfw['name'].upper()} ({sfw['thinkers']}) ===\n"
-        f"{sfw['instruction']}\n\n"
-        "=== SENTEZ GÖREVİ ===\n"
-        "Bu çerçeveyi birincil yöntem olarak kullanarak şunları ele al:\n"
-        "1. Araştırma ve eleştiri raporlarındaki temel gerilimler ve çelişkiler\n"
-        "2. Seçilen sentez çerçevesi bu gerilimleri nasıl dönüştürüyor?\n"
-        f"3. {rfw['name']} + {cfw['name']} bulgularını {sfw['name']} içinde bütünleştir\n"
-        "4. Hangi boyutlar her iki raporda da ihmal edildi?\n"
-        "5. Sahte uzlaşıyı gerçek entegrasyondan ayıran kriter nedir?\n"
-        "6. Kapanış: Bu soruyu sormaya devam etmenin önemi\n\n"
-        f"Çerçeve adını ({sfw['name']}) ve temel kavramlarını açıkça kullan. "
-        "En az 600 kelimelik entegral sentez raporu yaz.\n\n"
-        "=== ARAŞTIRMACININ RAPORU ===\n"
-        "{research_output}\n\n"
-        "=== ELEŞTİRMENİN RAPORU ===\n"
-        "{critique_output}"
-    )
-
+def _stage_defs(rfw, cfw, sfw, positions):
+    """UI'ya gönderilecek aşama başlıkları."""
     return [
-        (researcher_system, researcher_user),
-        (critic_system, critic_user_template),
-        (synth_system, synth_user_template),
+        {"title": "Savunucu A", "subtitle": positions[0]["label"], "color": "cyan"},
+        {"title": "Savunucu B", "subtitle": positions[1]["label"], "color": "cyan"},
+        {"title": "Kör Eleştirmen", "subtitle": cfw["name"], "color": "violet"},
+        {"title": "Sentezci", "subtitle": sfw["name"], "color": "gold"},
+        {"title": "Çürütücü", "subtitle": "Devil's Advocate", "color": "red"},
+        {"title": "Nihai Sentez", "subtitle": sfw["name"] + " — revize", "color": "gold"},
     ]
 
 
-def run_crew_thread(question: str, msg_queue: queue.Queue, frameworks: dict = None):
+def _map_positions(client, question: str) -> list[dict]:
+    """Sorudaki en güçlü iki karşıt pozisyonu belirler (akışsız, hızlı)."""
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=400,
+        temperature=0.0,
+        system=(
+            "Felsefi bir sorudaki en güçlü iki KARŞIT pozisyonu belirlersin. "
+            "Yalnızca geçerli JSON döndürürsün, başka hiçbir şey yazmazsın."
+        ),
+        messages=[{
+            "role": "user",
+            "content": (
+                f'Soru: "{question}"\n\n'
+                "Bu soruya verilebilecek en güçlü iki karşıt pozisyonu belirle. "
+                "Pozisyonlar gerçekten karşıt olmalı ve alandaki ana tartışma hattını yansıtmalı.\n\n"
+                'Şu formatta yanıtla: {"positions": [{"label": "<3-6 kelimelik pozisyon adı>", '
+                '"claim": "<pozisyonun tek cümlelik temel iddiası>"}, {...}]}'
+            ),
+        }],
+    )
+    text = "".join(b.text for b in resp.content if b.type == "text")
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    data = json.loads(match.group(0))
+    positions = data["positions"][:2]
+    if len(positions) < 2:
+        raise ValueError("Pozisyon haritalayıcı iki pozisyon döndüremedi")
+    return positions
+
+
+def _advocate_prompts(question: str, rfw: dict, position: dict, other: dict):
+    """Bir pozisyonun steelman savunusu için (system, user) çifti."""
+    system = (
+        f"Sen {rfw['name']} geleneğini ({rfw['thinkers']}) derinlemesine bilen ve bunu "
+        "birincil araştırma yöntemi olarak kullanan bir filozofsun. "
+        "Görevin sana verilen pozisyonun EN GÜÇLÜ savunusunu (steelman) kurmak — "
+        "karikatürünü değil, en zeki savunucusunun yapacağı savunmayı. "
+        "Konuyla ilgili olduğu ölçüde farklı kültür ve geleneklerden düşünürleri de kapsarsın. "
+        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
+    )
+    user = (
+        f'Soru: "{question}"\n\n'
+        f"SAVUNACAĞIN POZİSYON: {position['label']}\n"
+        f"Temel iddia: {position['claim']}\n\n"
+        f"KARŞIT POZİSYON (savunma, ama ciddiye al): {other['label']} — {other['claim']}\n\n"
+        f"=== KULLANILACAK ARAŞTIRMA ÇERÇEVESİ: {rfw['name'].upper()} ({rfw['thinkers']}) ===\n"
+        f"{rfw['instruction']}\n\n"
+        f"{CITATION_RULES}\n\n"
+        "=== GÖREV ===\n"
+        "1. Pozisyonun en güçlü 3-4 argümanını kur; her birini atıflarla destekle\n"
+        "2. Karşıt pozisyonun EN GÜÇLÜ itirazını dürüstçe aktar ve yanıtla\n"
+        "3. Pozisyonun tarihsel ve kültürlerarası savunucularını göster\n"
+        "4. Pozisyonun kendi içindeki en zayıf noktayı açıkça kabul et (tek paragraf)\n\n"
+        "En az 600 kelimelik, bölümlere ayrılmış bir savunma raporu yaz."
+    )
+    return system, user
+
+
+def _critic_prompts(question: str, cfw: dict, output_a: str, output_b: str,
+                    positions: list[dict]):
+    """Kör eleştiri: eleştirmen hangi araştırma çerçevesinin kullanıldığını BİLMEZ."""
+    system = (
+        f"Sen {cfw['name']} metodolojisini ({cfw['thinkers']}) ustalıkla uygulayan "
+        "bir epistemik hakemsin. Hiçbir tarafın bakış açısını önceden benimsemeden "
+        "tüm argümanları eşit mesafeden değerlendirirsin. "
+        "Raporların hangi yöntemle yazıldığı sana bilinçli olarak söylenmedi; "
+        "yalnızca metnin kendisini denetlersin. "
+        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
+    )
+    user = (
+        f'Soru: "{question}"\n\n'
+        "Aşağıda iki karşıt pozisyonun savunma raporları var. Görevin iki raporu "
+        "epistemik açıdan denetlemek ve KARŞILAŞTIRMALI bir objektiflik analizi yapmak.\n\n"
+        f"=== KULLANILACAK ELEŞTİRİ ÇERÇEVESİ: {cfw['name'].upper()} ({cfw['thinkers']}) ===\n"
+        f"{cfw['instruction']}\n\n"
+        "=== ELEŞTİRİ EKSENLERİ ===\n"
+        "1. Her raporun en güçlü ve en zayıf argümanı\n"
+        "2. Simetri denetimi: iki pozisyon eşit ciddiyette mi savunulmuş?\n"
+        "3. Retorik ağırlık: hangi rapor hangi mekanizmalarla ikna etmeye çalışıyor?\n"
+        "4. Atıf denetimi: şüpheli, doğrulanamaz veya bağlamından koparılmış görünen atıflar\n"
+        "5. Her iki raporun ortak kör noktası: ikisinin de sormadığı soru ne?\n\n"
+        "En az 500 kelimelik epistemik denetim raporu yaz.\n\n"
+        f"=== RAPOR A — Pozisyon: {positions[0]['label']} ===\n{output_a}\n\n"
+        f"=== RAPOR B — Pozisyon: {positions[1]['label']} ===\n{output_b}"
+    )
+    return system, user
+
+
+_RUBRIC_TOOL = {
+    "name": "submit_rubric",
+    "description": "Objektiflik rubriğini yapılandırılmış olarak gönder.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "reports": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string", "enum": ["A", "B"]},
+                        "strongest_argument": {"type": "string"},
+                        "steelman_quality": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "citation_reliability": {"type": "integer", "minimum": 1, "maximum": 5},
+                        "rhetorical_load": {"type": "integer", "minimum": 1, "maximum": 5},
+                    },
+                    "required": ["id", "strongest_argument", "steelman_quality",
+                                 "citation_reliability", "rhetorical_load"],
+                },
+            },
+            "symmetry_score": {"type": "integer", "minimum": 1, "maximum": 5},
+            "suspect_citations": {"type": "array", "items": {"type": "string"}},
+            "shared_blind_spot": {"type": "string"},
+            "overall_objectivity": {"type": "integer", "minimum": 1, "maximum": 5},
+        },
+        "required": ["reports", "symmetry_score", "suspect_citations",
+                     "shared_blind_spot", "overall_objectivity"],
+    },
+}
+
+
+def _rubric_call(client, question: str, output_a: str, output_b: str,
+                 critique: str, positions: list[dict]):
+    """Objektiflik rubriği — zorunlu tool call ile garantili-geçerli JSON."""
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=1000,
+        temperature=0.0,
+        system=(
+            "Sen epistemik denetim sonuçlarını sayısal rubriğe çeviren bir hakemsin. "
+            "Puanlarını denetim raporundaki bulgulara dayandırırsın."
+        ),
+        tools=[_RUBRIC_TOOL],
+        tool_choice={"type": "tool", "name": "submit_rubric"},
+        messages=[{
+            "role": "user",
+            "content": (
+                f'Soru: "{question}"\n\n'
+                f"İki karşıt savunma raporu (A: {positions[0]['label']}, "
+                f"B: {positions[1]['label']}) ve epistemik denetim raporu aşağıda. "
+                "Bunlara dayanarak rubriği doldur. rhetorical_load için düşük puan iyidir; "
+                "symmetry_score iki pozisyonun eşit ciddiyette savunulup savunulmadığını, "
+                "overall_objectivity sürecin bütününü puanlar. suspect_citations yalnızca "
+                "denetimde şüpheli bulunan atıfları içerir (yoksa boş liste).\n\n"
+                f"=== RAPOR A ===\n{output_a}\n\n"
+                f"=== RAPOR B ===\n{output_b}\n\n"
+                f"=== EPİSTEMİK DENETİM ===\n{critique}"
+            ),
+        }],
+    )
+    for block in resp.content:
+        if block.type == "tool_use":
+            return block.input
+    raise ValueError("Rubrik tool çağrısı dönmedi")
+
+
+def _synth_prompts(question: str, sfw: dict, output_a: str, output_b: str,
+                   critique: str, positions: list[dict]):
+    system = (
+        f"Sen {sfw['name']} modelini ({sfw['thinkers']}) derinlemesine bilen "
+        "bir entegral filozofsun. Gerçekliğin birbirine indirgenemeyen boyutlarını "
+        "bütünleştirmeyi görev sayarsın; hiçbir tekil bakış açısının tek başına "
+        "yeterli olmadığını bilirsin. Sahte uzlaşı üretmezsin: gerilimleri koruyan "
+        "dürüst bir entegrasyon hedeflersin. "
+        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
+    )
+    user = (
+        f'"{question}" sorusu bağlamında, iki karşıt savunma raporunu ve epistemik '
+        "denetim raporunu sentezle.\n\n"
+        f"=== KULLANILACAK SENTEZ ÇERÇEVESİ: {sfw['name'].upper()} ({sfw['thinkers']}) ===\n"
+        f"{sfw['instruction']}\n\n"
+        f"{CITATION_RULES}\n\n"
+        "=== SENTEZ GÖREVİ ===\n"
+        "1. İki pozisyon arasındaki gerçek gerilim noktalarını belirle\n"
+        "2. Eleştirmenin tespit ettiği bias ve kör noktaları sentezde düzelt\n"
+        "3. Seçilen sentez çerçevesiyle iki pozisyonu bütünleştir — hangisi hangi "
+        "boyutta haklı?\n"
+        "4. Sahte uzlaşıdan kaçın: çözülemeyen gerilimleri açıkça çözülmemiş olarak bırak\n"
+        "5. Kapanış: bu soruyu sormaya devam etmenin önemi\n\n"
+        "En az 600 kelimelik entegral sentez raporu yaz.\n\n"
+        f"=== RAPOR A — {positions[0]['label']} ===\n{output_a}\n\n"
+        f"=== RAPOR B — {positions[1]['label']} ===\n{output_b}\n\n"
+        f"=== EPİSTEMİK DENETİM ===\n{critique}"
+    )
+    return system, user
+
+
+def _refuter_prompts(question: str, synthesis: str):
+    system = (
+        "Sen görevi verilen metni ÇÜRÜTMEK olan bir felsefi hasımsın (devil's advocate). "
+        "Nazik olmak zorunda değilsin ama dürüst olmak zorundasın: gerçek zayıflıkları "
+        "bul, olmayan zayıflık uydurma. Türkçe yazarsın, markdown kullanabilirsin."
+    )
+    user = (
+        f'Soru: "{question}"\n\n'
+        "Aşağıdaki sentez raporunu çürütmeye çalış:\n"
+        "1. Sentezin en zayıf üç noktası — mantıksal boşluk, kanıtsız sıçrama veya "
+        "sahte uzlaşı\n"
+        "2. Sentezin görmezden geldiği en güçlü karşı-argüman\n"
+        "3. Sentez çerçevesinin kendisinin bu soruya dayattığı çarpıtma\n"
+        "4. Eğer sentez savunulabilir durumdaysa, bunu da dürüstçe söyle — "
+        "hangi kısımlar sağlam?\n\n"
+        "En fazla 400 kelimelik, keskin ve maddeler halinde bir çürütme yaz.\n\n"
+        f"=== SENTEZ RAPORU ===\n{synthesis}"
+    )
+    return system, user
+
+
+def _final_prompts(question: str, sfw: dict, synthesis: str, refutation: str):
+    system = (
+        f"Sen {sfw['name']} modelini ({sfw['thinkers']}) kullanan entegral bir filozofsun. "
+        "Kendi sentezine yöneltilen çürütmeyi ciddiye alır, savunulamayan kısımları "
+        "revize eder, savunulabilenleri gerekçesiyle korursun. "
+        "Türkçe yazarsın, markdown başlıkları ve **kalın** vurgular kullanabilirsin."
+    )
+    user = (
+        f'Soru: "{question}"\n\n'
+        "Aşağıda önceki sentezin ve ona yöneltilmiş çürütme var. NİHAİ yanıtı yaz:\n"
+        "1. Çürütmenin haklı olduğu noktaları açıkça kabul et ve düzelt\n"
+        "2. Haksız olduğu noktalarda sentezi gerekçesiyle savun\n"
+        "3. Revize edilmiş, kendi başına okunabilir NİHAİ sentezi sun\n"
+        "4. Sonuna 'Epistemik Durum' başlıklı kısa bir bölüm ekle: bu yanıtın "
+        "güven düzeyi, çözülmemiş gerilimler ve hangi yeni bilginin fikrini "
+        "değiştirebileceği\n\n"
+        "En az 600 kelimelik nihai rapor yaz.\n\n"
+        f"=== ÖNCEKİ SENTEZ ===\n{synthesis}\n\n"
+        f"=== ÇÜRÜTME ===\n{refutation}"
+    )
+    return system, user
+
+
+# ── Pipeline yürütücü ────────────────────────────────────────────────────────
+
+def _stream_stage(client, idx: int, system: str, user: str, msg_queue: queue.Queue,
+                  max_tokens: int = 4000) -> str:
+    """Tek bir aşamayı token-token akıtır, tam çıktıyı döner."""
+    collected = []
+    with client.messages.stream(
+        model=MODEL,
+        max_tokens=max_tokens,
+        temperature=TEMPERATURE,
+        # Sabit system prompt'ları cache'le (paralel savunucular aynı system'i paylaşır)
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user}],
+    ) as stream:
+        for text in stream.text_stream:
+            collected.append(text)
+            msg_queue.put({"type": "delta", "task_index": idx, "text": text})
+    return "".join(collected)
+
+
+def run_pipeline_thread(question: str, msg_queue: queue.Queue, frameworks: dict = None):
     try:
         import anthropic
 
@@ -361,49 +558,69 @@ def run_crew_thread(question: str, msg_queue: queue.Queue, frameworks: dict = No
         client = anthropic.Anthropic(api_key=api_key)
 
         fw = frameworks or DEFAULT_FRAMEWORKS
-        rfw = FRAMEWORKS.get(fw.get("research",  "analytic"),           FRAMEWORKS["analytic"])
-        cfw = FRAMEWORKS.get(fw.get("critique",  "impartial_spectator"), FRAMEWORKS["impartial_spectator"])
-        sfw = FRAMEWORKS.get(fw.get("synthesis", "aqal"),               FRAMEWORKS["aqal"])
+        rfw = FRAMEWORKS.get(fw.get("research", "analytic"), FRAMEWORKS["analytic"])
+        cfw = FRAMEWORKS.get(fw.get("critique", "impartial_spectator"), FRAMEWORKS["impartial_spectator"])
+        sfw = FRAMEWORKS.get(fw.get("synthesis", "aqal"), FRAMEWORKS["aqal"])
 
-        prompts = _build_agent_prompts(question, rfw, cfw, sfw)
+        # 0) Pozisyon haritası (akışsız)
+        msg_queue.put({"type": "phase", "label": "Karşıt pozisyonlar belirleniyor…"})
+        positions = _map_positions(client, question)
+        msg_queue.put({"type": "pipeline", "stages": _stage_defs(rfw, cfw, sfw, positions),
+                       "positions": positions})
 
-        outputs = ["", "", ""]
+        outputs = [""] * 6
 
-        for idx, (system_prompt, user_template) in enumerate(prompts):
-            if idx == 1:
-                user_msg = user_template.replace("{research_output}", outputs[0])
-            elif idx == 2:
-                user_msg = (
-                    user_template
-                    .replace("{research_output}", outputs[0])
-                    .replace("{critique_output}", outputs[1])
-                )
-            else:
-                user_msg = user_template
+        # 1-2) Paralel steelman savunucular
+        msg_queue.put({"type": "status", "agent": 0, "status": "running"})
+        msg_queue.put({"type": "status", "agent": 1, "status": "running"})
 
-            collected = []
-            with client.messages.stream(
-                model="claude-sonnet-4-6",
-                max_tokens=4000,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_msg}],
-            ) as stream:
-                for text in stream.text_stream:
-                    collected.append(text)
-                    msg_queue.put({
-                        "type": "delta",
-                        "task_index": idx,
-                        "text": text,
-                    })
+        def _run_advocate(i: int):
+            sys_p, usr_p = _advocate_prompts(
+                question, rfw, positions[i], positions[1 - i])
+            outputs[i] = _stream_stage(client, i, sys_p, usr_p, msg_queue, 3000)
+            msg_queue.put({"type": "task_complete", "task_index": i,
+                           "output": outputs[i]})
 
-            full_output = "".join(collected)
-            outputs[idx] = full_output
-            msg_queue.put({
-                "type": "task_complete",
-                "task_index": idx,
-                "agent_name": AGENT_NAMES[idx],
-                "output": full_output,
-            })
+        threads = [threading.Thread(target=_run_advocate, args=(i,), daemon=True)
+                   for i in (0, 1)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # 3) Kör eleştiri
+        msg_queue.put({"type": "status", "agent": 2, "status": "running"})
+        sys_p, usr_p = _critic_prompts(question, cfw, outputs[0], outputs[1], positions)
+        critique = _stream_stage(client, 2, sys_p, usr_p, msg_queue, 3500)
+        outputs[2] = critique
+        msg_queue.put({"type": "task_complete", "task_index": 2, "output": critique})
+
+        # 3b) Objektiflik rubriği (ayrı, akışsız çağrı — başarısızlığı pipeline'ı durdurmaz)
+        try:
+            rubric = _rubric_call(client, question, outputs[0], outputs[1],
+                                  critique, positions)
+            msg_queue.put({"type": "rubric", "data": rubric})
+        except Exception as rub_exc:
+            print(f"[rubric] atlandı: {type(rub_exc).__name__}: {rub_exc}", flush=True)
+
+        # 4) Sentez
+        msg_queue.put({"type": "status", "agent": 3, "status": "running"})
+        sys_p, usr_p = _synth_prompts(question, sfw, outputs[0], outputs[1],
+                                      critique, positions)
+        outputs[3] = _stream_stage(client, 3, sys_p, usr_p, msg_queue, 3500)
+        msg_queue.put({"type": "task_complete", "task_index": 3, "output": outputs[3]})
+
+        # 5) Çürütme
+        msg_queue.put({"type": "status", "agent": 4, "status": "running"})
+        sys_p, usr_p = _refuter_prompts(question, outputs[3])
+        outputs[4] = _stream_stage(client, 4, sys_p, usr_p, msg_queue, 1500)
+        msg_queue.put({"type": "task_complete", "task_index": 4, "output": outputs[4]})
+
+        # 6) Nihai sentez (revizyon)
+        msg_queue.put({"type": "status", "agent": 5, "status": "running"})
+        sys_p, usr_p = _final_prompts(question, sfw, outputs[3], outputs[4])
+        outputs[5] = _stream_stage(client, 5, sys_p, usr_p, msg_queue, 3500)
+        msg_queue.put({"type": "task_complete", "task_index": 5, "output": outputs[5]})
 
         msg_queue.put({"type": "done"})
 
@@ -413,43 +630,33 @@ def run_crew_thread(question: str, msg_queue: queue.Queue, frameworks: dict = No
 
 # ── SSE endpoint ─────────────────────────────────────────────────────────────
 
+MAX_QUESTION_LEN = 500
+
+
 @app.route("/api/run", methods=["POST"])
-def run_crew():
+def run_pipeline():
     data = request.get_json(silent=True) or {}
     question = (data.get("question") or "").strip()
     frameworks = data.get("frameworks") or DEFAULT_FRAMEWORKS
 
     if not question:
         return jsonify({"error": "Soru boş olamaz"}), 400
+    if len(question) > MAX_QUESTION_LEN:
+        return jsonify({"error": f"Soru {MAX_QUESTION_LEN} karakteri aşamaz"}), 400
 
     msg_queue: queue.Queue = queue.Queue()
 
     threading.Thread(
-        target=run_crew_thread,
+        target=run_pipeline_thread,
         args=(question, msg_queue, frameworks),
         daemon=True,
     ).start()
 
     def stream():
-        # Framework bilgisini UI'ya gönder
-        rfw = FRAMEWORKS.get(frameworks.get("research",  "analytic"),           FRAMEWORKS["analytic"])
-        cfw = FRAMEWORKS.get(frameworks.get("critique",  "impartial_spectator"), FRAMEWORKS["impartial_spectator"])
-        sfw = FRAMEWORKS.get(frameworks.get("synthesis", "aqal"),               FRAMEWORKS["aqal"])
-        yield f"data: {json.dumps({'type': 'frameworks', 'labels': [rfw['name'], cfw['name'], sfw['name']]})}\n\n"
-        # İlk ajan başladı bildirimi
-        yield f"data: {json.dumps({'type': 'status', 'agent': 0, 'status': 'running'})}\n\n"
-
         while True:
             msg = msg_queue.get()
-
-            if msg["type"] == "task_complete":
-                next_idx = msg["task_index"] + 1
-                if next_idx < 3:
-                    yield f"data: {json.dumps({'type': 'status', 'agent': next_idx, 'status': 'running'})}\n\n"
-                yield f"data: {json.dumps(msg)}\n\n"
-
-            elif msg["type"] in ("done", "error"):
-                yield f"data: {json.dumps(msg)}\n\n"
+            yield f"data: {json.dumps(msg)}\n\n"
+            if msg["type"] in ("done", "error"):
                 break
 
     return Response(
@@ -497,7 +704,7 @@ def chat():
             client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
             with client.messages.stream(
-                model="claude-sonnet-4-6",
+                model=MODEL,
                 max_tokens=1024,
                 system=CHAT_SYSTEM,
                 messages=messages,

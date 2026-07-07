@@ -1,0 +1,15 @@
+{
+  "description": "Regresyon eval seti — pipeline değişikliklerinden sonra çıktı kalitesini karşılaştırmak için sabit sorular. Kullanım: python evals/run_eval.py [n]",
+  "questions": [
+    "Matematik keşif midir, icat mıdır?",
+    "Özgür irade bir yanılsama mıdır?",
+    "Bilinç fiziksel süreçlere indirgenebilir mi?",
+    "Ahlaki değerler evrensel midir, kültürel midir?",
+    "Güzellik nesnede midir, bakışta mıdır?",
+    "Teknoloji insan doğasını değiştirir mi, yoksa açığa mı çıkarır?",
+    "Bilgi gerekçelendirilmiş doğru inanç mıdır?",
+    "Zaman gerçek midir, zihinsel bir kurgu mudur?",
+    "Yapay zeka gerçek anlamda anlayabilir mi?",
+    "Adalet güçlünün çıkarı mıdır?"
+  ]
+}

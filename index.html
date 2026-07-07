@@ -328,6 +328,90 @@
       gap: 18px;
     }
 
+    /* Faz bandı — pozisyon haritalama */
+    #phase-banner {
+      max-width: 1100px;
+      margin: 0 auto 14px;
+      font-family: var(--mono);
+      font-size: .62rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--cyan-dim);
+      display: none;
+    }
+    #phase-banner.visible { display: block; }
+
+    /* Objektiflik raporu */
+    .rubric-card {
+      max-width: 1100px;
+      margin: 18px auto 0;
+      border: 1px solid rgba(124,58,237,.3);
+      border-radius: 10px;
+      background: rgba(124,58,237,.04);
+      padding: 18px 20px;
+      display: none;
+    }
+    .rubric-card.visible { display: block; }
+    .rubric-head {
+      font-family: var(--mono);
+      font-size: .62rem;
+      letter-spacing: .14em;
+      color: #a78bfa;
+      margin-bottom: 14px;
+    }
+    .rubric-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 8px;
+      font-size: .78rem;
+    }
+    .rubric-label {
+      font-family: var(--mono);
+      font-size: .6rem;
+      letter-spacing: .06em;
+      color: rgba(255,255,255,.45);
+      width: 190px;
+      flex-shrink: 0;
+    }
+    .rubric-bar {
+      flex: 1;
+      height: 5px;
+      background: rgba(255,255,255,.06);
+      border-radius: 3px;
+      overflow: hidden;
+      align-self: center;
+    }
+    .rubric-bar > div {
+      height: 100%;
+      background: linear-gradient(90deg, #7c3aed, #a78bfa);
+      border-radius: 3px;
+    }
+    .rubric-value {
+      font-family: var(--mono);
+      font-size: .62rem;
+      color: #a78bfa;
+      width: 34px;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .rubric-note {
+      font-size: .74rem;
+      color: rgba(255,255,255,.55);
+      line-height: 1.6;
+      margin-top: 10px;
+    }
+    .rubric-note strong { color: rgba(255,255,255,.75); }
+    .rubric-flag {
+      font-size: .72rem;
+      color: #fca5a5;
+      margin-top: 4px;
+    }
+
+    /* Çürütücü kartı — kırmızı vurgu */
+    .agent-card.card-red.running { border-color: rgba(239,68,68,.4); box-shadow: 0 0 20px rgba(239,68,68,.08); }
+    .agent-card.card-red .card-num { color: rgba(239,68,68,.6); }
+
     @media (max-width: 900px) {
       .agents-grid { grid-template-columns: 1fr; }
     }
@@ -1035,78 +1119,17 @@
       <span class="q-text" id="q-echo"></span>
     </div>
 
-    <!-- Three agent cards -->
-    <div class="agents-grid">
+    <!-- Phase banner (pozisyon haritalama vb.) -->
+    <div id="phase-banner"></div>
 
-      <!-- Card 1 -->
-      <div class="agent-card" id="card-0">
-        <div class="card-head">
-          <span class="card-num">01</span>
-          <div style="flex:1;min-width:0">
-            <div class="card-title">Felsefi Araştırmacı</div>
-            <div id="card-sub-0" style="font-family:var(--mono);font-size:.58rem;color:var(--cyan-dim);margin-top:2px;letter-spacing:.04em;">Analitik Felsefe</div>
-          </div>
-          <div class="card-status status-idle" id="status-0">
-            <div class="s-dot"></div>
-          </div>
-        </div>
-        <div class="card-body" id="body-0">
-          <div class="card-idle-msg">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <circle cx="11" cy="11" r="8"></circle>
-              <path d="m21 21-4.35-4.35"></path>
-            </svg>
-            <span>Bekleniyor…</span>
-          </div>
-        </div>
-      </div>
+    <!-- Agent cards — pipeline event'i ile dinamik oluşturulur -->
+    <div class="agents-grid" id="agents-grid"></div>
 
-      <!-- Card 2 -->
-      <div class="agent-card" id="card-1">
-        <div class="card-head">
-          <span class="card-num">02</span>
-          <div style="flex:1;min-width:0">
-            <div class="card-title">Epistemik Eleştirmen</div>
-            <div id="card-sub-1" style="font-family:var(--mono);font-size:.58rem;color:#6d35cc;margin-top:2px;letter-spacing:.04em;">Tarafsız Gözlemci</div>
-          </div>
-          <div class="card-status status-idle" id="status-1">
-            <div class="s-dot"></div>
-          </div>
-        </div>
-        <div class="card-body" id="body-1">
-          <div class="card-idle-msg">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-              <circle cx="12" cy="12" r="3"></circle>
-            </svg>
-            <span>Bekleniyor…</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Card 3 -->
-      <div class="agent-card" id="card-2">
-        <div class="card-head">
-          <span class="card-num">03</span>
-          <div style="flex:1;min-width:0">
-            <div class="card-title">Entegral Sentezci</div>
-            <div id="card-sub-2" style="font-family:var(--mono);font-size:.58rem;color:var(--gold-dim);margin-top:2px;letter-spacing:.04em;">AQAL / Dört Kadran</div>
-          </div>
-          <div class="card-status status-idle" id="status-2">
-            <div class="s-dot"></div>
-          </div>
-        </div>
-        <div class="card-body" id="body-2">
-          <div class="card-idle-msg">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-              <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
-            </svg>
-            <span>Bekleniyor…</span>
-          </div>
-        </div>
-      </div>
-
-    </div><!-- /.agents-grid -->
+    <!-- Objectivity Report -->
+    <div id="rubric-card" class="rubric-card">
+      <div class="rubric-head">OBJEKTİFLİK RAPORU</div>
+      <div id="rubric-body"></div>
+    </div>
 
     <!-- Restart -->
     <div id="restart-wrap">
@@ -1506,36 +1529,76 @@ function startCrew(question) {
   textarea.disabled = true;
   document.getElementById('ask-btn').disabled = true;
 
-  // Reset cards
-  for (let i = 0; i < 3; i++) {
-    const card   = document.getElementById('card-' + i);
-    const status = document.getElementById('status-' + i);
-    const body   = document.getElementById('body-' + i);
-    card.className = 'agent-card';
-    status.className = 'card-status status-idle';
-    status.innerHTML = '<div class="s-dot"></div>';
+  // Kartlar pipeline event'i gelince kurulur; şimdilik grid'i boşalt, faz bandını göster
+  document.getElementById('agents-grid').innerHTML = '';
+  const rubricCard = document.getElementById('rubric-card');
+  rubricCard.classList.remove('visible');
+  document.getElementById('rubric-body').innerHTML = '';
+  const phaseBanner = document.getElementById('phase-banner');
+  phaseBanner.textContent = '◈ Karşıt pozisyonlar belirleniyor…';
+  phaseBanner.classList.add('visible');
+
+  // SSE — token-level streaming (aşama sayısı pipeline event'i ile belirlenir)
+  let NSTAGES = 6;
+  let completedCards = [];
+  let streamBuffers  = [];
+  let streamStarted  = [];
+
+  const STAGE_ICONS = {
+    cyan:   '<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>',
+    violet: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>',
+    gold:   '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>',
+    red:    '<path d="M12 2 2 22h20L12 2z"></path><line x1="12" y1="10" x2="12" y2="15"></line><circle cx="12" cy="18" r=".5"></circle>'
+  };
+  const STAGE_COLORS = { cyan: 'var(--cyan-dim)', violet: '#a78bfa', gold: 'var(--gold-dim)', red: '#f87171' };
+
+  function buildPipelineCards(stages) {
+    NSTAGES = stages.length;
+    completedCards = new Array(NSTAGES).fill(false);
+    streamBuffers  = new Array(NSTAGES).fill('');
+    streamStarted  = new Array(NSTAGES).fill(false);
+
+    const grid = document.getElementById('agents-grid');
+    grid.innerHTML = stages.map((s, i) => `
+      <div class="agent-card${s.color === 'red' ? ' card-red' : ''}" id="card-${i}">
+        <div class="card-head">
+          <span class="card-num">${String(i + 1).padStart(2, '0')}</span>
+          <div style="flex:1;min-width:0">
+            <div class="card-title">${s.title}</div>
+            <div id="card-sub-${i}" style="font-family:var(--mono);font-size:.58rem;color:${STAGE_COLORS[s.color] || 'var(--cyan-dim)'};margin-top:2px;letter-spacing:.04em;">${s.subtitle}</div>
+          </div>
+          <div class="card-status status-idle" id="status-${i}">
+            <div class="s-dot"></div>
+          </div>
+        </div>
+        <div class="card-body" id="body-${i}">
+          <div class="card-idle-msg">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${STAGE_ICONS[s.color] || STAGE_ICONS.cyan}</svg>
+            <span>Bekleniyor…</span>
+          </div>
+        </div>
+      </div>`).join('');
   }
 
-  const body0 = document.getElementById('body-0');
-  body0.innerHTML = `<div class="card-idle-msg">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-      <circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>
-    </svg><span>Bekleniyor…</span></div>`;
-
-  for (let i = 1; i < 3; i++) {
-    const b = document.getElementById('body-' + i);
-    const icons = [
-      '<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path>',
-      '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>',
-      '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>'
-    ];
-    b.innerHTML = `<div class="card-idle-msg"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">${icons[i]}</svg><span>Bekleniyor…</span></div>`;
+  function renderRubric(r) {
+    const bar = (v) => `<div class="rubric-bar"><div style="width:${Math.max(0, Math.min(5, v)) * 20}%"></div></div>`;
+    let html = '';
+    (r.reports || []).forEach((rep) => {
+      html += `<div class="rubric-row"><span class="rubric-label">Rapor ${rep.id} — steelman kalitesi</span>${bar(rep.steelman_quality)}<span class="rubric-value">${rep.steelman_quality}/5</span></div>`;
+      html += `<div class="rubric-row"><span class="rubric-label">Rapor ${rep.id} — atıf güvenilirliği</span>${bar(rep.citation_reliability)}<span class="rubric-value">${rep.citation_reliability}/5</span></div>`;
+    });
+    if (r.symmetry_score != null)
+      html += `<div class="rubric-row"><span class="rubric-label">Pozisyon simetrisi</span>${bar(r.symmetry_score)}<span class="rubric-value">${r.symmetry_score}/5</span></div>`;
+    if (r.overall_objectivity != null)
+      html += `<div class="rubric-row"><span class="rubric-label">Genel objektiflik</span>${bar(r.overall_objectivity)}<span class="rubric-value">${r.overall_objectivity}/5</span></div>`;
+    if (r.shared_blind_spot)
+      html += `<div class="rubric-note"><strong>Ortak kör nokta:</strong> ${r.shared_blind_spot}</div>`;
+    (r.suspect_citations || []).forEach((c) => {
+      html += `<div class="rubric-flag">⚑ Şüpheli atıf: ${c}</div>`;
+    });
+    document.getElementById('rubric-body').innerHTML = html;
+    rubricCard.classList.add('visible');
   }
-
-  // SSE — token-level streaming
-  const completedCards = [false, false, false];
-  const streamBuffers  = ['', '', ''];
-  const streamStarted  = [false, false, false];
 
   fetch('/api/run', {
     method: 'POST',
@@ -1575,16 +1638,17 @@ function startCrew(question) {
   });
 
   function handleMessage(msg) {
-    if (msg.type === 'frameworks') {
-      // Kart alt başlıklarını seçilen framework adlarıyla güncelle
-      const subtitles = ['card-sub-0', 'card-sub-1', 'card-sub-2'];
-      msg.labels.forEach((label, i) => {
-        const el = document.getElementById('card-sub-' + i);
-        if (el) el.textContent = label;
-      });
+    if (msg.type === 'phase') {
+      phaseBanner.textContent = '◈ ' + msg.label;
+      phaseBanner.classList.add('visible');
+
+    } else if (msg.type === 'pipeline') {
+      // Aşamalar belli oldu — kartları kur, faz bandını gizle
+      buildPipelineCards(msg.stages);
+      phaseBanner.classList.remove('visible');
 
     } else if (msg.type === 'status') {
-      setCardRunning(msg.agent);
+      if (document.getElementById('card-' + msg.agent)) setCardRunning(msg.agent);
 
     } else if (msg.type === 'delta') {
       const idx = msg.task_index;
@@ -1593,19 +1657,26 @@ function startCrew(question) {
         setCardStreaming(idx);
       }
       streamBuffers[idx] += msg.text;
-      appendDelta(idx, mdToHtml(streamBuffers[idx]));
+      // Eleştirmen kartında makine-okur rubrik bölümünü gösterme
+      let visible = streamBuffers[idx];
+      const rubricAt = visible.indexOf('<RUBRIC>');
+      if (rubricAt !== -1) visible = visible.slice(0, rubricAt);
+      appendDelta(idx, mdToHtml(visible));
+
+    } else if (msg.type === 'rubric') {
+      renderRubric(msg.data);
 
     } else if (msg.type === 'task_complete') {
       const idx = msg.task_index;
       completedCards[idx] = true;
-      // Akış zaten gövdeye yansıdı; sadece bitmiş durumuna geçiş yap.
-      // Eğer (geriye dönük) delta hiç gelmediyse, çıktıyı yine de göster.
+      // Akış zaten gövdeye yansıdı; rubrik temizlenmiş nihai çıktıyla değiştir.
       if (!streamStarted[idx]) {
         setCardDone(idx, mdToHtml(msg.output), () => {});
       } else {
+        appendDelta(idx, mdToHtml(msg.output));
         setCardStreamComplete(idx);
       }
-      if (completedCards.every(Boolean)) {
+      if (completedCards.length && completedCards.every(Boolean)) {
         document.getElementById('restart-wrap').classList.add('visible');
       }
 
@@ -1614,6 +1685,7 @@ function startCrew(question) {
 
     } else if (msg.type === 'error') {
       showError(msg.message || 'Bilinmeyen hata');
+      phaseBanner.classList.remove('visible');
       finalize();
     }
   }
